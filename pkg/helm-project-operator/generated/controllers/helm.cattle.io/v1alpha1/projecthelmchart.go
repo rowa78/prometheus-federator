@@ -21,6 +21,7 @@ package v1alpha1
 import (
 	"context"
 	"time"
+	"fmt"
 
 	"github.com/rancher/lasso/pkg/client"
 	"github.com/rancher/lasso/pkg/controller"
@@ -252,16 +253,32 @@ func (c *projectHelmChartCache) AddIndexer(indexName string, indexer ProjectHelm
 }
 
 func (c *projectHelmChartCache) GetByIndex(indexName, key string) (result []*v1alpha1.ProjectHelmChart, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v1alpha1.ProjectHelmChart, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v1alpha1.ProjectHelmChart))
-	}
-	return result, nil
+    fmt.Println("==> GetByIndex aufgerufen: indexName=", indexName, "key=", key)
+    
+    // Abrufen der Objekte
+    objs, err := c.indexer.ByIndex(indexName, key)
+    if err != nil {
+        fmt.Println("==> Fehler beim Abrufen des Index:", "indexName=", indexName, "key=", key, "error=", err)
+        return nil, err
+    }
+    
+    fmt.Println("==> Anzahl gefundener Objekte:", len(objs), "für indexName=", indexName, "key=", key)
+
+    // Konvertieren der Ergebnisse
+    result = make([]*v1alpha1.ProjectHelmChart, 0, len(objs))
+    for _, obj := range objs {
+        projectHelmChart, ok := obj.(*v1alpha1.ProjectHelmChart)
+        if !ok {
+            fmt.Println("==> Warnung: Objekt konnte nicht in *v1alpha1.ProjectHelmChart umgewandelt werden:", obj)
+            continue
+        }
+        fmt.Println("==> Gefundenes ProjectHelmChart:", "Namespace=", projectHelmChart.Namespace, "Name=", projectHelmChart.Name)
+        result = append(result, projectHelmChart)
+    }
+
+    return result, nil
 }
+
 
 type ProjectHelmChartStatusHandler func(obj *v1alpha1.ProjectHelmChart, status v1alpha1.ProjectHelmChartStatus) (v1alpha1.ProjectHelmChartStatus, error)
 

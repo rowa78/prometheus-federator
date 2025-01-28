@@ -3,6 +3,8 @@ package release
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/labels"
+	"time"
 
 	"github.com/rancher/lasso/pkg/controller"
 	v1alpha1 "github.com/rancher/prometheus-federator/pkg/helm-locker/apis/helm.cattle.io/v1alpha1"
@@ -72,13 +74,31 @@ func Register(
 		recorder:                  recorder,
 	}
 
+	// Auf Cache-Befüllung warten
+	fmt.Println("==> Warte auf Cache-Initialisierung...")
+	waitForCacheInitialization(helmReleaseCache, 30*time.Second)
+
 	lockableObjectSetHandler.Register(ctx, "on-objectset-change", controller.SharedControllerHandlerFunc(h.OnObjectSetChange))
 
-	helmReleaseCache.AddIndexer(HelmReleaseByReleaseKey, helmReleaseToReleaseKey)
+	//helmReleaseCache.AddIndexer(HelmReleaseByReleaseKey, helmReleaseToReleaseKey)
+	helmReleaseCache.AddIndexer(HelmReleaseByReleaseKey, func(obj *v1alpha1.HelmRelease) ([]string, error) {
+		key := fmt.Sprintf("%s/%s", obj.Namespace, obj.Name)
+		fmt.Printf("==> Indexierung: Namespace=%s, Name=%s, Key=%s um %s\n",
+			obj.Namespace, obj.Name, key, time.Now().Format(time.RFC3339))
+		return []string{key}, nil
+	})
+	
+	
+
+	
 
 	relatedresource.Watch(ctx, "on-helm-secret-change", h.resolveHelmRelease, helmReleases, secrets)
 
-	helmReleases.OnChange(ctx, "apply-lock-on-release", h.OnHelmRelease)
+	//helmReleases.OnChange(ctx, "apply-lock-on-release", h.OnHelmRelease)
+	helmReleases.OnChange(ctx, "apply-lock-on-release", func(key string, helmRelease *v1alpha1.HelmRelease) (*v1alpha1.HelmRelease, error) {
+		fmt.Printf("==> Watch-Event empfangen: %s um %s\n", key, time.Now().Format(time.RFC3339))
+		return helmRelease, nil
+	})
 
 	remove.RegisterScopedOnRemoveHandler(ctx, helmReleases, "on-helm-release-remove",
 		func(_ string, obj runtime.Object) (bool, error) {
@@ -95,18 +115,49 @@ func Register(
 	)
 }
 
+func waitForCacheInitialization(cache helmcontroller.HelmReleaseCache, maxWait time.Duration) {
+    start := time.Now()
+    for {
+        helmReleases, _ := cache.List("", labels.Everything())
+        if len(helmReleases) > 0 {
+            fmt.Println("==> Cache wurde initialisiert:", len(helmReleases), "HelmReleases gefunden.")
+            break
+        }
+        if time.Since(start) > maxWait {
+            fmt.Println("==> Cache-Initialisierung fehlgeschlagen: Keine HelmReleases gefunden nach", maxWait)
+            break
+        }
+        fmt.Println("==> Warten auf Cache-Initialisierung...")
+        time.Sleep(1 * time.Second) // Wiederholung jede Sekunde
+    }
+}
+
 func (h *handler) OnObjectSetChange(setID string, obj runtime.Object) (runtime.Object, error) {
+	fmt.Println("==> OnObjectSetChange aufgerufen mit setID=", setID, "und obj=", obj)
+	
+	// Cache-Inhalt überprüfen
+	helmReleases, _ := h.helmReleaseCache.List("", labels.Everything())
+	fmt.Println("==> Alle HelmReleases im Cache (OnObjectSetChange):", len(helmReleases))
+	for _, hr := range helmReleases {
+		fmt.Printf("==> HelmRelease: Namespace=%s, Name=%s\n", hr.Namespace, hr.Name)
+	}
+	
+	
+	
 	helmReleases, err := h.helmReleaseCache.GetByIndex(HelmReleaseByReleaseKey, setID)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find HelmReleases for objectset %s to trigger event", setID)
 	}
 	for _, helmRelease := range helmReleases {
+		fmt.Printf("==>Helm-Release gefunden: Namespace=%s, Name=%s\n", helmRelease.Namespace, helmRelease.Name)
 		if helmRelease == nil {
 			continue
 		}
 		if obj != nil {
+			fmt.Printf("==>Helm-Release locked: Namespace=%s, Name=%s\n", helmRelease.Namespace, helmRelease.Name)
 			h.recorder.Eventf(helmRelease, corev1.EventTypeNormal, "Locked", "Applied ObjectSet %s tied to HelmRelease %s/%s to lock into place", setID, helmRelease.Namespace, helmRelease.Name)
 		} else {
+			fmt.Printf("==> UNTRACKED!!!!")
 			h.recorder.Eventf(helmRelease, corev1.EventTypeNormal, "Untracked", "ObjectSet %s tied to HelmRelease %s/%s is not tracked", setID, helmRelease.Namespace, helmRelease.Name)
 		}
 	}
@@ -115,6 +166,7 @@ func (h *handler) OnObjectSetChange(setID string, obj runtime.Object) (runtime.O
 
 func helmReleaseToReleaseKey(helmRelease *v1alpha1.HelmRelease) ([]string, error) {
 	releaseKey := releaseKeyFromRelease(helmRelease)
+	fmt.Println("==> Generierter releaseKey:", releaseKey)
 	return []string{releaseKeyToString(releaseKey)}, nil
 }
 
@@ -174,6 +226,7 @@ func (h *handler) shouldManage(helmRelease *v1alpha1.HelmRelease) (bool, error) 
 }
 
 func (h *handler) OnHelmReleaseRemove(_ string, helmRelease *v1alpha1.HelmRelease) (*v1alpha1.HelmRelease, error) {
+	fmt.Println("==> OnHelmReleaseRemove aufgerufen")
 	if helmRelease == nil {
 		return nil, nil
 	}
@@ -191,6 +244,7 @@ func (h *handler) OnHelmReleaseRemove(_ string, helmRelease *v1alpha1.HelmReleas
 }
 
 func (h *handler) OnHelmRelease(_ string, helmRelease *v1alpha1.HelmRelease) (*v1alpha1.HelmRelease, error) {
+	fmt.Println("==> OnHelmRelease aufgerufen")
 	if shouldManage, err := h.shouldManage(helmRelease); err != nil {
 		return helmRelease, err
 	} else if !shouldManage {
