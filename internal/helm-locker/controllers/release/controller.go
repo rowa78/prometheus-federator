@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rancher/lasso/pkg/controller"
 	v1alpha1 "github.com/rancher/prometheus-federator/internal/helm-locker/apis/helm.cattle.io/v1alpha1"
@@ -71,6 +72,9 @@ func Register(
 		lockableObjectSetRegister: lockableObjectSetRegister,
 		recorder:                  recorder,
 	}
+	fmt.Println("==> start sleep")
+	time.Sleep(30 * time.Second)
+	fmt.Println("==> finished sleep")
 
 	lockableObjectSetHandler.Register(ctx, "on-objectset-change", controller.SharedControllerHandlerFunc(h.OnObjectSetChange))
 
